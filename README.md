@@ -19,6 +19,14 @@ Currently the model only works for >1 GPU :')
 
 DIPS and DB5 work. SabDab has not been updated for a long time.
 
+## Data
+
+My data splits
+
+```
+ln -s /data/rsg/chemistry/rmwu/src/sandbox/glue/data data
+```
+
 ## Conda environment
 
 ```
