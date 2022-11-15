@@ -11,20 +11,19 @@ import json
 import itertools as it
 from collections import ChainMap
 
-from termcolor import colored
-
 
 # these arguments are shared among all experiments
 COMMON_CONFIG = [
     {
         "seed": [0],
         "lr": [1e-4, 1e-5],
-        "dropout": [0.1],
-        "weight_decay": [0., 1e-5, 1e-6],
+        "dropout": [0., 0.1],
+        "weight_decay": [0., 1e-6],
         "epochs": [500],
         "patience": [50],
         "num_folds": [5],
-        "n_layers": [1, 2, 4]
+        "num_conv_layers": [2, 4],
+        "max_radius": [5., 10.]
     }
 ]
 
@@ -41,26 +40,22 @@ DATA_CONFIG = [
     #    "pose_path": ["/data/rsg/chemistry/rmwu/data/processed/binding/energy/"],
     #},
     {
-        "dataset": ["dips"],
-        "data_file": ["data/dips.csv"],
-        "data_path": ["/data/rsg/chemistry/rmwu/data/raw/binding/dips/pairs-pruned"],
-        # "None" will default to fine pose loader
-        "pose_file": ["None", "data/dips_hpose.csv"],
-        "pose_path": ["/data/rsg/chemistry/rmwu/data/processed/binding/energy/"],
+        "config_file": ["config/dips.yaml"],
+        #"dataset": ["dips"],
+        #"data_file": ["data/dips.csv"],
+        #"data_path": ["/data/rsg/chemistry/rmwu/data/raw/binding/dips/pairs-pruned"],
     },
 ]
 # these configure the models we run for each dataset
 MODEL_CONFIG = [
-    #{
+    {
     #    "config_file": ["config/regression.json"],
     #    "use_all_atoms": [None],  # add flag or not (no value)
-    #    "batch_size": [16]
-    #},
-    {
-        "config_file": ["config/regression.json"],
-        "use_all_atoms": [""],  # add flag or not (no value)
-        "batch_size": [128]
+        "batch_size": [12]
     },
+    #{
+    #    "config_file": ["config/dips.yaml"],
+    #},
 ]
 
 
@@ -72,8 +67,10 @@ def parse_args():
                         "gpus < num are available.")
     parser.add_argument("--jobs_per_gpu", type=int, default=1,
                         help="number of jobs per GPU")
+    parser.add_argument("--gpus_per_job", type=int, default=4,
+                        help="number of GPUs per job")
     parser.add_argument("--log_dir", type=str,
-                        default="/data/scratch/rmwu/tmp-runs/ml-energy/dispatcher",
+                        default="/data/scratch/rmwu/tmp-runs/glue/dispatcher",
                         help="Directory for the log file.")
     parser.add_argument("--result_path", type=str,
                         default="results.csv",
@@ -106,7 +103,7 @@ def main():
 
     # queues
     gpu_queues = {}
-    for q in range(args.num_gpu * args.jobs_per_gpu):
+    for q in range(args.num_gpu * args.jobs_per_gpu // args.gpus_per_job):
         gpu_queues[q] = multiprocessing.Queue()
     done_queue = multiprocessing.Queue()
 
@@ -116,11 +113,12 @@ def main():
 
     for config in all_configs:
         gpu_queues[indx].put(config)
-        indx = (indx + 1) % (args.num_gpu * args.jobs_per_gpu)
+        indx = (indx + 1) % len(gpu_queues)
         num_jobs += 1
 
-    for gpu in range(args.num_gpu * args.jobs_per_gpu):
+    for gpu in range(len(gpu_queues)):
         job_queue = gpu_queues[gpu]
+        gpu = gpu * args.gpus_per_job
         print("Start GPU worker {} with {} jobs".format(
             gpu, job_queue.qsize()))
         multiprocessing.Process(
@@ -138,8 +136,7 @@ def main():
                 results.append(cur_res)
 
         except Exception as e:
-            print("Experiment at {} failed".format(
-                colored(result_path, "red")))
+            print("Experiment at {} failed".format(result_path))
             print(e)
             continue
 
@@ -191,6 +188,7 @@ def _launch_experiment(gpu, configs, args):
            f"--save_path {log_stem} "
            f"--checkpoint_path {log_stem} "  # recover in case of crash
            f"--tensorboard_path runs_dispatcher "
+           f"--num_gpus={args.gpus_per_job} "
            f"--gpu={gpu} ")
 
     # add all keys to config

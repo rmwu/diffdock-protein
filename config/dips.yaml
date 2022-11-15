@@ -9,6 +9,8 @@
      no_torsion: True
      no_batch_norm: True
  train:
-     lr: 1.e-5
      patience: 50
      epochs: 500
+     #lr: 1.e-5
+     #weight_decay: 0.
+     #num_conv_layers: 4

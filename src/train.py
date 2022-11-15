@@ -55,19 +55,29 @@ def train(train_loader, val_loader, model,
             torch.cuda.empty_cache()
 
             # forward pass
-            output = model(batch)
-            # compute loss (modifies output in place)
-            if args.num_gpu > 1:
-                losses = model.module.compute_loss(batch, output)
-            else:
-                losses = model.compute_loss(batch, output)
+            try:
+                output = model(batch)
+                # compute loss (modifies output in place)
+                if args.num_gpu > 1:
+                    losses = model.module.compute_loss(batch, output)
+                else:
+                    losses = model.compute_loss(batch, output)
 
-            # backpropagate
-            loss = losses["loss"]
-            for name, param in model.named_parameters():
-                if torch.any(torch.isnan(param)):
-                    print(name, "nan")
-            loss.backward()
+                # backpropagate
+                loss = losses["loss"]
+                for name, param in model.named_parameters():
+                    if torch.any(torch.isnan(param)):
+                        print(name, "nan")
+                loss.backward()
+
+            # catch OOM this is amazing !!!
+            except RuntimeError as e:
+                printt("RuntimeError", e)
+                for p in model.parameters():
+                    if p.grad is not None:
+                        del p.grad  # free some memory
+                torch.cuda.empty_cache()
+                continue
 
             # log gradients
             grads = []
