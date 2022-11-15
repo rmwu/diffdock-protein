@@ -137,6 +137,21 @@ def parse_args():
                         action="store_true",
                         help="Set to True if running dispatcher")
 
+    # ====== inference ======
+    parser.add_argument("--num_steps",
+                        type=int, default=10,
+                        help="Number of denoising steps")
+    parser.add_argument("--ode",
+                        action="store_true",
+                        help="Use ODE for inference")
+    parser.add_argument("--no_random",
+                        action="store_true",
+                        help="Use no randomness in reverse diffusion")
+    parser.add_argument("--no_final_noise",
+                        action="store_true",
+                        help="Use no noise in the final step of "
+                             "reverse diffusion")
+
     # ======== model =======
     parser.add_argument("--model_type",
                         choices=["diffusion"],
@@ -293,11 +308,12 @@ def process_args(args):
             printt("invalid checkpoint_path", args.checkpoint_path)
         if os.path.exists(args.args_file):
             with open(args.args_file) as f:
-                config = yaml.safe_load(f)
+                saved_config = yaml.safe_load(f)
         # do not overwrite certain args
-        k_to_skip = ["checkpoint_path", "save_path",
-                     "gpu", "mode", "test_fold",
-                     "batch_size"]
+        k_to_skip = list(config.keys())  # config takes precedence
+        k_to_skip.extend(["checkpoint_path", "save_path",
+                          "gpu", "mode", "test_fold",
+                          "batch_size"])
         for k in k_to_skip:
             if k in config:
                 del config[k]
@@ -309,8 +325,6 @@ def override_args(args, config):
         Recursively copy over config to args
     """
     for k,v in config.items():
-        if "file" in k and args.mode == "test":
-            continue
         if type(v) is dict:
             override_args(args, v)
         else:

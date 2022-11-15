@@ -32,6 +32,8 @@ def log(item, fp, reduction=True):
             item_new[key] = float(np.mean(val))
             item_new[key_std] = float(np.std(val))
         else:
+            if torch.is_tensor(val):
+                item[key] = val.tolist()
             item_new[key] = val
     # initialization: write keys
     if not os.path.exists(fp):
@@ -128,10 +130,6 @@ def init(model):
         # weight terms
         else:
             nn.init.xavier_normal_(param)
-
-
-def get_timesteps(inference_steps):
-    return np.linspace(1, 0, inference_steps + 1)[:-1]
 
 # -------- metrics
 

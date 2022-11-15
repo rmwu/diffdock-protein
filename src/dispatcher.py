@@ -21,7 +21,8 @@ COMMON_CONFIG = [
         "lr": [1e-4, 1e-5],
         "dropout": [0.1],
         "weight_decay": [0., 1e-5, 1e-6],
-        "epochs": [200],
+        "epochs": [500],
+        "patience": [50],
         "num_folds": [5],
         "n_layers": [1, 2, 4]
     }

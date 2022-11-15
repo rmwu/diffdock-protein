@@ -1,15 +1,18 @@
-# main script for training
+# This script should contain run-specific information
+# like GPU id, batch size, etc.
+# Everything else should be specified in config.yaml
 
-# training params
+# inference params
 SEED=0
-CUDA=6
+CUDA=5
+NUM_GPU=2
 BATCH_SIZE=32
 
-NAME="db5_denoise"
-CONFIG="config/${NAME}.json"
-CHECKPOINT="/data/scratch/rmwu/tmp-runs/ml-energy/db5_denoise-pos/"
+NAME="dips"
+CONFIG="config/${NAME}.yaml"
+CHECKPOINT="/data/scratch/rmwu/tmp-runs/glue/dips"
 SAVE_PATH=$CHECKPOINT
-TEST_FOLD=4
+TEST_FOLD=3
 
 echo $SAVE_PATH
 
@@ -22,5 +25,5 @@ python src/main.py \
     --batch_size $BATCH_SIZE \
     --test_fold $TEST_FOLD \
     --gpu $CUDA --seed $SEED \
-    #--use_unbound \
+    --num_gpu $NUM_GPU \
 

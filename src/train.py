@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from utils import printt, print_res, get_optimizer
-from utils import log, _compute_topk, _compute_roc_auc, _compute_prc_auc
+from utils import log, compute_rmsd
 
 
 def train(train_loader, val_loader, model,
@@ -227,6 +227,26 @@ def evaluate(val_loader, model, writer, args,
         except ValueError:
             value = torch.cat(value)
         scores[key] = torch.mean(value).item()
+
+    return scores
+
+
+def evaluate_pose(data_list, samples_list):
+    """
+        Evaluate sampled pose vs. ground truth
+    """
+    all_rmsds = []
+    assert len(data_list) == len(samples_list)
+    for true_graph, pred_graph in zip(data_list, samples_list):
+        true_xyz = true_graph["ligand"].pos
+        pred_xyz = pred_graph["ligand"].pos
+        assert true_xyz.shape == pred_xyz.shape
+        rmsd = compute_rmsd(true_xyz, pred_xyz)
+        all_rmsds.append(rmsd)
+
+    scores = {
+        "rmsd": all_rmsds,
+    }
 
     return scores
 

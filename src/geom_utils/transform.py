@@ -180,7 +180,7 @@ class NoiseSchedule:
 
 
 def set_time(complex_graphs, t_tr, t_rot, t_tor,
-        batch_size: int, device):
+        batch_size: int, device=None):
     """
         Save sampled time to current batch
     """

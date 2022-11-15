@@ -12,9 +12,10 @@ from tensorboardX import SummaryWriter
 
 from args import parse_args
 from data import load_data, get_data
-from train import train, evaluate
 from model import load_model, to_cuda
 from utils import printt, print_res, log
+from train import train, evaluate, evaluate_pose
+from sample import sample
 
 
 def set_seed(seed):
@@ -116,7 +117,6 @@ def main():
     elif args.mode == "test":
         set_seed(args.seed)
         printt("running inference")
-        writer = None  # no need to tensorboard
         ## set up
         # load and convert data to DataLoaders
         loaders = get_data(data, args.test_fold, args)
@@ -126,12 +126,18 @@ def main():
         model = to_cuda(model, args)
         printt("finished loading model")
 
-        test_score = evaluate(loaders["test"], model, writer, args)
-        # add val for hyperparameter search
-        val_score = evaluate(loaders["val"], model, writer, args)
+        # run reverse diffusion process
+        samples_test = sample(loaders["test"], model, args)
+        samples_val = sample(loaders["val"], model, args)
 
+        # test fold
+        test_score = evaluate_pose(loaders["test"], samples_test)
+
+        # add val for hyperparameter search
+        val_score = evaluate_pose(loaders["val"], samples_val)
         for key, val in val_score.items():
             test_score[f"val_{key}"] = val
+
         print_res(test_score)
         log(test_score, args.log_file, reduction=False)
 
