@@ -51,9 +51,11 @@ class Loader:
         # cache for post-processed data, optional
         self.graph_cache = self.data_file.replace(".csv",
                 f"_graph_{args.resolution}.pkl")
+        self.esm_cache = self.data_file.replace(".csv", f"_esm.pkl")
         if args.debug:
             self.data_cache = self.data_cache.replace(".pkl", "_debug.pkl")
-            self.graph_cache = self.data_cache.replace(".pkl", "_debug.pkl")
+            self.graph_cache = self.graph_cache.replace(".pkl", "_debug.pkl")
+            self.esm_cache = self.esm_cache.replace(".pkl", "_debug.pkl")
         # biopython PDB parser
         self.parser = Bio.PDB.PDBParser()
 
@@ -157,16 +159,17 @@ class Loader:
                     item[f"{k}_seq"] = subset[1]
                     item[f"{k}_xyz"] = subset[2]
 
-        #### load ESM if applicable
+        #### convert to HeteroData graph objects
+        for item in data.values():
+            item["graph"] = self.to_graph(item)
+
+        if not args.no_graph_cache:
+            with open(self.graph_cache, "wb+") as f:
+                pickle.dump([data, data_params], f)
+
+        #### tokenize AFTER converting to graph
         if args.lm_embed_dim > 0:
-            # use ESM2 with 33 layers (same as DiffDock)
-            esm_model, alphabet = torch.hub.load(
-                    "facebookresearch/esm:main",
-                    "esm2_t33_650M_UR50D")
-            tokenizer = alphabet.get_batch_converter()
-            tokenize(data.values(), "ligand_seq", tokenizer)
-            tokenize(data.values(), "receptor_seq", tokenizer)
-            self.esm_model = esm_model
+            data = self.compute_embeddings(data)
             data_params["num_residues"] = 23  # <cls> <sep> <pad>
             printt("finished tokenizing residues with ESM")
         else:
@@ -175,8 +178,8 @@ class Loader:
             tokenize(data.values(), "ligand_seq", tokenizer)
             self.esm_model = None
             data_params["num_residues"] = len(tokenizer)
+            data_params["tokenizer"] = tokenizer
             printt("finished tokenizing residues")
-        data_params["tokenizer"] = tokenizer
 
         #### protein sequence tokenization
         # tokenize atoms
@@ -184,14 +187,6 @@ class Loader:
         tokenize(data.values(), "ligand_atom", atom_tokenizer)
         data_params["atom_tokenizer"] = atom_tokenizer
         printt("finished tokenizing all inputs")
-
-        #### convert to HeteroData graph objects
-        for item in data.values():
-            item["graph"] = self.to_graph(item)
-
-        if not args.no_graph_cache:
-            with open(self.graph_cache, "wb+") as f:
-                pickle.dump([data, data_params], f)
 
         return data, data_params
 
@@ -218,27 +213,77 @@ class Loader:
     def compute_embeddings(self, data):
         """
             Pre-compute ESM2 embeddings.
-
-            NOTE: this is currently NOT batched so it is slow.
-            It is fairly easy to batchify it by just passing in
-            a list and cropping outputs to proper lengths
         """
-        if self.esm_model is None:
-            return data
         printt("Computing ESM embeddings")
-        self.esm_model = self.esm_model.cuda()
+        # load pretrained model
+        esm_model, alphabet = torch.hub.load(
+                "facebookresearch/esm:main",
+                "esm2_t33_650M_UR50D")
+        self.esm_model = esm_model.cuda().eval()
+        tokenizer = alphabet.get_batch_converter()
+        # convert to 3 letter codes
+        aa_code = defaultdict(lambda: "<unk>")
+        aa_code.update(
+            {k.upper():v for k,v in protein_letters_3to1.items()})
+        # fix ordering
+        all_graphs = list(g["graph"] for g in data.values())
+        rec_seqs = [g["receptor"].x for g in all_graphs]
+        lig_seqs = [g["ligand"].x for g in all_graphs]
+        rec_seqs = ["".join(aa_code[s] for s in seq) for seq in rec_seqs]
+        lig_seqs = ["".join(aa_code[s] for s in seq) for seq in lig_seqs]
+        # batchify sequences
+        rec_batches = self.esm_batchify(rec_seqs, tokenizer)
+        lig_batches = self.esm_batchify(lig_seqs, tokenizer)
         with torch.no_grad():
-            for item in tqdm(data.values(),
-                             desc="ESM embeddings", ncols=50):
-                for key in ["receptor", "ligand"]:
-                    graph = item["graph"][key]
-                    seq = graph.x[:,None]
-                    rep = self.esm_model(seq.cuda(), repr_layers=[33])
-                    rep = rep["representations"][33].cpu().squeeze()
-                    # remove <cls> <sep>
-                    graph.x = torch.cat([seq[1:-1], rep[1:-1]], dim=1)
-                    assert len(graph.pos) == len(graph.x) == graph.num_nodes
+            pad_idx = alphabet.padding_idx
+            rec_reps = self.run_esm(rec_batches, pad_idx)
+            lig_reps = self.run_esm(lig_batches, pad_idx)
+        # overwrite graph.x for each element in batch
+        for idx in range(len(rec_reps)):
+            rec_graph = all_graphs[idx]["receptor"]
+            lig_graph = all_graphs[idx]["ligand"]
+            # cat one-hot representation and ESM embedding
+            rec_graph.x = torch.cat([rec_reps[idx][0],
+                rec_reps[idx][1]], dim=1)
+            lig_graph.x = torch.cat([lig_reps[idx][0],
+                lig_reps[idx][1]], dim=1)
+            assert len(rec_graph.pos) == len(rec_graph.x)
+            assert len(lig_graph.pos) == len(lig_graph.x)
+
         return data
+
+    def esm_batchify(self, seqs, tokenizer):
+        batch_size = self.args.batch_size
+        iterator = range(0, len(seqs), batch_size)
+        # group up sequences
+        batches = [seqs[i:i + batch_size] for i in iterator]
+        batches = [[("", seq) for seq in batch] for batch in batches]
+        # tokenize
+        batch_tokens = [tokenizer(batch)[2] for batch in batches]
+        return batch_tokens
+
+    def run_esm(self, batches, padding_idx):
+        """
+            Wrapper around ESM specifics
+            @param (list)  batch
+            @return (list)  same order as batch
+        """
+        # run ESM model
+        all_reps = []
+        for batch in tqdm(batches, desc="ESM", ncols=50):
+            reps = self.esm_model(batch.cuda(), repr_layers=[33])
+            reps = reps["representations"][33].cpu().squeeze()[:,1:]
+            all_reps.append(reps)
+        # crop to length
+        # exclude <cls> <sep>
+        cropped = []
+        for i, batch in enumerate(batches):
+            batch_lens = (batch != padding_idx).sum(1) - 2
+            for j, length in enumerate(batch_lens):
+                rep_crop = all_reps[i][j,:length]
+                token_crop = batch[j,1:length+1,None]
+                cropped.append((rep_crop, token_crop))
+        return cropped
 
     def split_data(self, raw_data, args):
         # separate out train/test
@@ -474,46 +519,6 @@ class SabDabLoader(Loader):
             with open(self.data_cache, "wb+") as f:
                 pickle.dump(path_to_data, f)
         return data
-
-
-def apply_transforms(xyz, rot, trans, com):
-    """
-        Apply rotation and translations
-        @param xyz  (N, L, 3) coordinates of interest
-        @param rot  (N, 3) Euler angles for rotation
-        @param trans  (N, 3) translation
-        @param com  (N, 3) center of mass
-    """
-    Q = get_matrix(rot)
-    Q = Q.expand(len(xyz), -1, -1)
-    x = torch.bmm(Q, (xyz - com)[:,:,None]).squeeze()
-    x = x + com + trans
-    return x
-
-
-def get_matrix(euler):
-    """
-        Thank you Prof. Huang ah ha ha ha
-        @param (torch.Tensor) euler  (N, 3)
-    """
-    cos = torch.cos(euler).t()  # (3, N)
-    sin = torch.sin(euler).t()
-
-    rot = torch.zeros(1, 3, 3)
-
-    rot[:,0,0] = cos[2]*cos[0]-cos[1]*sin[0]*sin[2]
-    rot[:,0,1] = cos[2]*sin[0]+cos[1]*cos[0]*sin[2]
-    rot[:,0,2] = sin[2]*sin[1]
-
-    rot[:,1,0] = -sin[2]*cos[0]-cos[1]*sin[0]*cos[2]
-    rot[:,1,1] = -sin[2]*sin[0]+cos[1]*cos[0]*cos[2]
-    rot[:,1,2] =  cos[2]*sin[1]
-
-    rot[:,2,0] =  sin[1]*sin[0]
-    rot[:,2,1] = -sin[1]*cos[0]
-    rot[:,2,2] =  cos[1]
-
-    return rot
 
 
 # ------ DATA PROCESSING ------
