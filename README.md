@@ -1,6 +1,11 @@
 # DiffDock modified for protein-protein
 
-Note: currently I only have atom-level information. I'm (quickly) adding back the residue-level ESM embeddings so should have an update today. Of course you should feel free to read through / poke around.
+Note: I added ESM embeddings directly back into the preprocessing. Currently
+it's not yet batched so it may take a while.
+Of course you should feel free to read through / poke around while I make it faster~
+
+Also I would recommend debugging with DB5 instead of DIPS as it's very fast to
+run.
 
 ## Model training:
 
@@ -8,7 +13,7 @@ Note: currently I only have atom-level information. I'm (quickly) adding back th
 ./src/train.sh
 ```
 
-To modify dataset, change configuration file.
+To modify dataset/model/training parameters, change `config_file`.
 
 
 ## Model inference:
@@ -19,7 +24,9 @@ To modify dataset, change configuration file.
 
 Currently the model only works for >1 GPU :') But trust me it'll take much too long if you try with only 1.
 
-DIPS and DB5 work. SabDab has not been updated for a long time.
+DIPS and DB5 work. SabDab has not been updated for a long time
+but it's an interesting dataset that can also incorporate the
+receptor flexibility aspects, to-be-developed.
 
 ## Data
 
