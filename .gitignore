@@ -1,0 +1,10 @@
+**.swp
+**.swo
+**.pkl
+
+**.nfs*
+
+__pycache__
+runs
+data
+
