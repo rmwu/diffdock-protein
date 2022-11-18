@@ -51,7 +51,7 @@ MODEL_CONFIG = [
     {
     #    "config_file": ["config/regression.json"],
     #    "use_all_atoms": [None],  # add flag or not (no value)
-        "batch_size": [12]
+        "batch_size": [18]
     },
     #{
     #    "config_file": ["config/dips.yaml"],
@@ -62,12 +62,12 @@ MODEL_CONFIG = [
 def parse_args():
     parser = argparse.ArgumentParser(description="Dispatcher to run all experiments")
 
-    parser.add_argument("--num_gpu", type=int, default=8,
+    parser.add_argument("--num_gpu", type=int, default=6,
                         help="num gpus available to process. Default assume all "
                         "gpus < num are available.")
     parser.add_argument("--jobs_per_gpu", type=int, default=1,
                         help="number of jobs per GPU")
-    parser.add_argument("--gpus_per_job", type=int, default=4,
+    parser.add_argument("--gpus_per_job", type=int, default=3,
                         help="number of GPUs per job")
     parser.add_argument("--log_dir", type=str,
                         default="/data/scratch/rmwu/tmp-runs/glue/dispatcher",

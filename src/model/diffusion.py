@@ -30,7 +30,11 @@ class AtomEmbedding(nn.Module):
         super(AtomEmbedding, self).__init__()
         # add 1 for padding
         self.atom_ebd = nn.Embedding(num_atom+1, args.ns)
-        self.sigma_ebd = torch.nn.Linear(args.sigma_embed_dim, args.ns)
+        self.sigma_ebd = nn.Linear(args.sigma_embed_dim, args.ns)
+        # LM embedding (ESM2)
+        self.lm_ebd_dim = args.lm_embed_dim
+        if self.lm_ebd_dim > 0:
+            self.lm_ebd = nn.Linear(self.lm_ebd_dim + args.ns, args.ns)
 
         _init(self)
 
@@ -38,9 +42,14 @@ class AtomEmbedding(nn.Module):
         # atom sequence
         atom_ebd = self.atom_ebd(x[:,0:1].long()).squeeze()
         # sigma noise embedding
-        sigma_ebd = self.sigma_ebd(x[:,1:])
+        sigma_start = 1 + self.lm_ebd_dim
+        sigma_ebd = self.sigma_ebd(x[:,sigma_start:])
         # add together
         final_ebd = atom_ebd + sigma_ebd
+        # consider LM embedding here
+        if self.lm_ebd_dim > 0:
+            x = torch.cat([final_ebd, x[:, 1:sigma_start]], dim=1)
+            final_ebd = self.lm_ebd(x)
         return final_ebd
 
 
@@ -91,11 +100,9 @@ class TPCL(nn.Module):
         """
         edge_src, edge_dst = edge_index
         tp = self.tensor_prod(node_attr[edge_dst], edge_sh, self.fc(edge_attr))
-        #print(tp[0], tp.shape, "tp")
 
         out_nodes = out_nodes or node_attr.shape[0]
         out = scatter(tp, edge_src, dim=0, dim_size=out_nodes, reduce=reduction)
-        #print(out[0], out.shape, "out")
 
         if self.residual:
             new_shape = (0, out.shape[-1] - node_attr.shape[-1])
@@ -104,7 +111,6 @@ class TPCL(nn.Module):
 
         if self.batch_norm:
             out = self.batch_norm(out)
-        #print(out[0], out.shape, "out bn")
         return out
 
 
@@ -133,7 +139,7 @@ class TensorProductScoreModel(torch.nn.Module):
         self.confidence_mode = confidence_mode
         self.num_conv = args.num_conv_layers
 
-        num_atoms = len(model_params["atom_tokenizer"])
+        num_atoms = model_params["num_residues"]
         self.atom_embed = AtomEmbedding(args, num_atoms)
 
         # protein edge encoder
@@ -356,8 +362,6 @@ class TensorProductScoreModel(torch.nn.Module):
                     (0, rec_intra_update.shape[-1] - rec_node_attr.shape[-1]))
                 rec_node_attr = rec_node_attr + rec_intra_update + rec_inter_update
 
-        #print(lig_node_attr[0,0], rec_node_attr[0,0], "final ebd")
-
         # compute confidence score
         if self.confidence_mode:
             scalar_lig_attr = (
@@ -382,10 +386,6 @@ class TensorProductScoreModel(torch.nn.Module):
         center_edge_attr = torch.cat(
             [center_edge_attr, lig_node_attr[center_edge_index[0], : self.ns]], -1
         )
-        #print("center", center_edge_attr)
-        #print(center_edge_index.shape, center_edge_attr.shape,
-        #      center_edge_sh.shape)
-        #print("lig", lig_node_attr)
         global_pred = self.final_conv(
             lig_node_attr,
             center_edge_index,
@@ -395,20 +395,15 @@ class TensorProductScoreModel(torch.nn.Module):
         )
 
         # ligand tr [3], ligand rot [3] ?
-        #print("global", global_pred[0], global_pred.shape)
         tr_pred = global_pred[:, :3] + global_pred[:, 6:9]
         rot_pred = global_pred[:, 3:6] + global_pred[:, 9:]
         batch.graph_sigma_emb = self.t_embedding(batch.complex_t["tr"])
-
-        #print("pred pre norm", tr_pred[0], rot_pred[0])
 
         # fix the magnitude of tr and rot score vectors
         tr_norm = torch.linalg.vector_norm(tr_pred, dim=1)[:, None]
         tr_scale = self.tr_final_layer(
             torch.cat([tr_norm, batch.graph_sigma_emb], dim=1))
         tr_pred = (tr_pred / tr_norm) * tr_scale
-
-        #print("pred pre sigma", tr_pred[0], rot_pred[0])
 
         rot_norm = torch.linalg.vector_norm(rot_pred, dim=1)[:, None]
         rot_scale = self.rot_final_layer(
@@ -422,9 +417,6 @@ class TensorProductScoreModel(torch.nn.Module):
 
         if self.no_torsion or batch["ligand"].edge_mask.sum() == 0:
             tor_pred = torch.empty(0, device=tr_pred.device)
-            #print("pred", tr_pred[0], rot_pred[0])
-            #print(tr_pred.shape, rot_pred.shape)
-            #print(tr_s, rot_s)
             return tr_pred, rot_pred, tor_pred
 
         # >>> FIXED UP TO HERE
@@ -476,50 +468,6 @@ class TensorProductScoreModel(torch.nn.Module):
 
         return tr_pred, rot_pred, tor_pred
 
-    def mol_conv_graph(self, batch):
-        """
-            Builds the ligand graph edges and initial node and edge
-            features
-        """
-        batch["ligand"].node_sigma_emb = self.t_embedding(
-            batch["ligand"].node_t["tr"]
-        )
-
-        # compute edges
-        radius_edges = radius_graph(
-            batch["ligand"].pos, self.lig_max_radius, batch["ligand"].batch
-        )
-        edge_index = torch.cat(
-            [batch["ligand", "ligand"].edge_index, radius_edges], 1
-        ).long()
-        edge_attr = torch.cat(
-            [
-                batch["ligand", "ligand"].edge_attr,
-                torch.zeros(
-                    radius_edges.shape[-1],
-                    self.in_lig_edge_features,
-                    device=batch["ligand"].x.device,
-                ),
-            ],
-            0,
-        )
-
-        # compute initial features
-        edge_sigma_emb = batch["ligand"].node_sigma_emb[edge_index[0].long()]
-        edge_attr = torch.cat([edge_attr, edge_sigma_emb], 1)
-        node_attr = torch.cat([batch["ligand"].x, batch["ligand"].node_sigma_emb], 1)
-
-        src, dst = edge_index
-        edge_vec = batch["ligand"].pos[dst.long()] - batch["ligand"].pos[src.long()]
-        edge_length_emb = self.lig_dist_exp(edge_vec.norm(dim=-1))
-
-        edge_attr = torch.cat([edge_attr, edge_length_emb], 1)
-        edge_sh = o3.spherical_harmonics(
-            self.sh_irreps, edge_vec, normalize=True, normalization="component"
-        )
-
-        return node_attr, edge_index, edge_attr, edge_sh
-
     def build_rigid_graph(self, batch, key):
         """
             Fixed rigid proteins.
@@ -528,8 +476,11 @@ class TensorProductScoreModel(torch.nn.Module):
         batch[key].node_sigma_emb = self.t_embedding(
             batch[key].node_t["tr"]
         )  # tr rot and tor noise is all the same
+        # if no ESM models, graph.x should still be flat
+        if len(batch[key].x.shape) == 1:
+            batch[key].x = batch[key].x[:,None]
         node_attr = torch.cat(
-            [batch[key].x[:,None], batch[key].node_sigma_emb], 1
+            [batch[key].x, batch[key].node_sigma_emb], 1
         )
 
         # this assumes the edges were already created in preprocessing since protein's structure is fixed

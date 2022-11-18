@@ -1,5 +1,8 @@
 """
     Training script
+
+    TODO: add in sampling to evaluation every k epochs
+    This can be accomplished by importing sample from sample
 """
 
 import os

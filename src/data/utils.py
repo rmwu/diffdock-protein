@@ -23,6 +23,7 @@ import Bio
 import Bio.PDB
 warnings.filterwarnings("ignore",
     category=Bio.PDB.PDBExceptions.PDBConstructionWarning)
+from Bio.Data.IUPACData import protein_letters_3to1
 
 from utils import load_csv, printt
 from utils import compute_rmsd
@@ -48,7 +49,8 @@ class Loader:
         self.data_to_load = load_csv(self.data_file)
         self.data_cache = self.data_file.replace(".csv", "_cache.pkl")
         # cache for post-processed data, optional
-        self.graph_cache = self.data_file.replace(".csv", "_graph.pkl")
+        self.graph_cache = self.data_file.replace(".csv",
+                f"_graph_{args.resolution}.pkl")
         if args.debug:
             self.data_cache = self.data_cache.replace(".pkl", "_debug.pkl")
             self.graph_cache = self.data_cache.replace(".pkl", "_debug.pkl")
@@ -136,9 +138,10 @@ class Loader:
             Tokenize, etc.
         """
         # check if cache exists
-        if not args.no_cache and os.path.exists(self.graph_cache):
+        if not args.no_graph_cache and os.path.exists(self.graph_cache):
             with open(self.graph_cache, "rb") as f:
                 data, data_params = pickle.load(f)
+                printt("Loaded processed data from cache")
                 return data, data_params
 
         # non-data parameters
@@ -154,11 +157,28 @@ class Loader:
                     item[f"{k}_seq"] = subset[1]
                     item[f"{k}_xyz"] = subset[2]
 
-        #### protein sequence tokenization
-        # tokenize residues
-        tokenizer = tokenize(data.values(), "receptor_seq")
-        tokenize(data.values(), "ligand_seq", tokenizer)
+        #### load ESM if applicable
+        if args.lm_embed_dim > 0:
+            # use ESM2 with 33 layers (same as DiffDock)
+            esm_model, alphabet = torch.hub.load(
+                    "facebookresearch/esm:main",
+                    "esm2_t33_650M_UR50D")
+            tokenizer = alphabet.get_batch_converter()
+            tokenize(data.values(), "ligand_seq", tokenizer)
+            tokenize(data.values(), "receptor_seq", tokenizer)
+            self.esm_model = esm_model
+            data_params["num_residues"] = 23  # <cls> <sep> <pad>
+            printt("finished tokenizing residues with ESM")
+        else:
+            # tokenize residues for non-ESM
+            tokenizer = tokenize(data.values(), "receptor_seq")
+            tokenize(data.values(), "ligand_seq", tokenizer)
+            self.esm_model = None
+            data_params["num_residues"] = len(tokenizer)
+            printt("finished tokenizing residues")
         data_params["tokenizer"] = tokenizer
+
+        #### protein sequence tokenization
         # tokenize atoms
         atom_tokenizer = tokenize(data.values(), "receptor_atom")
         tokenize(data.values(), "ligand_atom", atom_tokenizer)
@@ -169,7 +189,7 @@ class Loader:
         for item in data.values():
             item["graph"] = self.to_graph(item)
 
-        if not args.no_cache:
+        if not args.no_graph_cache:
             with open(self.graph_cache, "wb+") as f:
                 pickle.dump([data, data_params], f)
 
@@ -184,7 +204,7 @@ class Loader:
         # retrieve position and compute kNN
         for key in ["receptor", "ligand"]:
             data[key].pos = item[f"{key}_xyz"].float()
-            data[key].x = item[f"{key}_atom"]
+            data[key].x = item[f"{key}_seq"]  # _seq is residue id
             # kNN graph
             edge_index = knn_graph(data[key].pos, self.args.knn_size)
             data[key, "contact", key].edge_index = edge_index
@@ -193,6 +213,31 @@ class Loader:
         for key in ["receptor", "ligand"]:
             data[key].pos = data[key].pos - center
         data.center = center  # save old center
+        return data
+
+    def compute_embeddings(self, data):
+        """
+            Pre-compute ESM2 embeddings.
+
+            NOTE: this is currently NOT batched so it is slow.
+            It is fairly easy to batchify it by just passing in
+            a list and cropping outputs to proper lengths
+        """
+        if self.esm_model is None:
+            return data
+        printt("Computing ESM embeddings")
+        self.esm_model = self.esm_model.cuda()
+        with torch.no_grad():
+            for item in tqdm(data.values(),
+                             desc="ESM embeddings", ncols=50):
+                for key in ["receptor", "ligand"]:
+                    graph = item["graph"][key]
+                    seq = graph.x[:,None]
+                    rep = self.esm_model(seq.cuda(), repr_layers=[33])
+                    rep = rep["representations"][33].cpu().squeeze()
+                    # remove <cls> <sep>
+                    graph.x = torch.cat([seq[1:-1], rep[1:-1]], dim=1)
+                    assert len(graph.pos) == len(graph.x) == graph.num_nodes
         return data
 
     def split_data(self, raw_data, args):
@@ -254,6 +299,9 @@ class DIPSLoader(Loader):
         data = self.read_files()
         data = self.assign_receptor(data)
         data, data_params = self.process_data(data, args)
+        data = self.compute_embeddings(data)
+
+        #### pre-compute ESM embeddings if needed
         self.data = data
         self.data_params = data_params
         printt(len(self.data), "entries loaded")
@@ -268,7 +316,8 @@ class DIPSLoader(Loader):
                 path_to_data = pickle.load(f)
         else:
             path_to_data = {}
-        for line in tqdm(self.data_to_load, desc="data loading", ncols=50):
+        for line in tqdm(self.data_to_load,
+                         desc="data loading", ncols=50):
             path = line["path"]
             item = path_to_data.get(path)
             if item is None:
@@ -333,6 +382,7 @@ class DB5Loader(Loader):
             self.data_cache = self.data_cache.replace(".pkl", "_b.pkl")
         data = self.read_files()
         data, data_params = self.process_data(data, args)
+        data = self.compute_embeddings(data)
         self.data = data
         self.data_params = data_params
         printt(len(self.data), "entries loaded")
@@ -347,7 +397,8 @@ class DB5Loader(Loader):
                 path_to_data = pickle.load(f)
         else:
             path_to_data = {}
-        for line in tqdm(self.data_to_load, desc="data loading", ncols=50):
+        for line in tqdm(self.data_to_load,
+                         desc="data loading", ncols=50):
             pdb = line["path"]
             item = path_to_data.get(pdb)
             if item is None:
@@ -382,6 +433,7 @@ class SabDabLoader(Loader):
         # standard workflow
         data = self.read_files()
         data, data_params = self.process_data(data, args)
+        data = self.compute_embeddings(data)
         self.data = data
         self.data_params = data_params
         printt(len(self.data), "entries loaded")
@@ -397,7 +449,8 @@ class SabDabLoader(Loader):
         else:
             path_to_data = {}
 
-        for line in tqdm(self.data_to_load, desc="data loading", ncols=50):
+        for line in tqdm(self.data_to_load,
+                         desc="data loading", ncols=50):
             pdb = line["pdb"]
             item = path_to_data.get(pdb)
             if item is None:
@@ -420,100 +473,6 @@ class SabDabLoader(Loader):
         if not os.path.exists(self.data_cache):
             with open(self.data_cache, "wb+") as f:
                 pickle.dump(path_to_data, f)
-        return data
-
-
-class ToyLoader(Loader):
-    def __init__(self, args):
-        super(ToyLoader, self).__init__(args)
-        self.size = 10  # number of residues
-        self.args = args
-        data = self.read_files()
-        self.data, self.data_params = self.process_data(data, args)
-        self.splits = self.split_data(self.data, args)
-
-        # fake pose data for testing
-        self.poses = self.read_poses()
-
-    def read_files(self):
-        # separated by 1A
-        receptor_xyz = torch.zeros(self.size, 3)
-        ligand_xyz = torch.zeros(self.size, 3)
-
-        # be careful to span all of R3 for FA
-        # zig zag shape noise. separated by approx 1A.
-        receptor_xyz[:,0] = torch.arange(self.size)
-        receptor_xyz[:,1] = (torch.arange(self.size) % 2 - 1) * 0.1
-        ligand_xyz[:,0] = torch.arange(self.size)
-        ligand_xyz[:,2] = 1
-
-        met_seq = ["MET"] * self.size
-        gly_seq = ["GLY"] * self.size
-        item = {
-            "receptor_xyz": receptor_xyz,
-            "ligand_xyz": ligand_xyz,
-        }
-
-        data = []
-        sizes = {
-            "train": 2,
-            "val": 2,
-            "test": 2
-        }
-        for split, max_size in sizes.items():
-            for i in range(max_size):
-                new_item = item.copy()
-                new_item["split"] = split
-                new_item["pdb_id"] = len(data)
-                new_item["path"] = len(data)
-                xyz, xyz2, rot = self.rotate(item["ligand_xyz"],
-                                             item["receptor_xyz"],
-                                             seed=len(data))
-                # sequence classification sub-task
-                if i % 2 == 0:
-                    new_item["receptor_seq"] = met_seq
-                    new_item["ligand_seq"] = met_seq
-                    new_item["label"] = 0
-                else:
-                    new_item["receptor_seq"] = gly_seq
-                    new_item["ligand_seq"] = gly_seq
-                    new_item["label"] = 1
-                # assign coordinates
-                new_item["ligand_xyz"] = xyz
-                new_item["receptor_xyz"] = xyz2
-                new_item["rot"] = rot
-                new_item["old_ligand_xyz"] = item["ligand_xyz"]
-                data.append(new_item)
-        data = {i:x for i,x in enumerate(data)}
-        return data
-
-    def rotate(self, xyz, xyz2, seed):
-        # get random rotation
-        rot = Rotation.random(random_state=seed)
-        rot = torch.tensor(rot.as_matrix().squeeze()).to(xyz)
-        # apply rotation
-        c1, c2 = xyz.mean(1, keepdim=True), xyz2.mean(1, keepdim=True)
-        xyz = (xyz - c1) @ rot + c1
-        xyz2 = (xyz2 - c2) @ rot + c2
-        return xyz, xyz2, rot
-
-    def read_poses(self):
-        data = defaultdict(dict)
-        # technically original sigmas are standard deviations
-        # but we can reuse them here. convert to A from nm
-        noise = torch.linspace(self.args.sigma_begin * 10, 0,
-                               self.args.num_noise_level)
-        for k,v in self.data.items():
-            lig_xyz = v["old_ligand_xyz"]
-            poses = []
-            for delta in noise:
-                xyz = lig_xyz.clone()
-                xyz[:,2] = xyz[:,2] + delta
-                c = xyz.mean(1, keepdim=True)
-                xyz = (xyz - c) @ v["rot"] + c
-                poses.append(xyz)
-            data[k]["poses"] = poses
-            data[k]["rmsds"] = [compute_rmsd(lig_xyz, xyz) for xyz in poses]
         return data
 
 
@@ -573,16 +532,28 @@ def tokenize(data, key, tokenizer=None):
     all_values = set(itertools.chain(*all_values))
     if tokenizer is None:
         tokenizer = {}  # never used
-    for item in sorted(all_values):
-        if item not in tokenizer:
-            tokenizer[item] = len(tokenizer) + 1  # 1-index
-    f_token = lambda seq: [tokenizer[x] for x in seq]
+    if type(tokenizer) is dict:
+        for item in sorted(all_values):
+            if item not in tokenizer:
+                tokenizer[item] = len(tokenizer) + 1  # 1-index
+        f_token = lambda seq: [tokenizer[x] for x in seq]
+    else:
+        aa_code = defaultdict(lambda: "<unk>")
+        aa_code.update(
+            {k.upper():v for k,v in protein_letters_3to1.items()})
+        def f_token(seq):
+            seq = "".join([aa_code[s] for s in seq])
+            seq = tokenizer([("", seq)])[2][0]
+            return seq
     # tokenize items and modify data in place
     raw_key = f"{key}_raw"
     for item in data:
         raw_item = item[key]
         item[raw_key] = raw_item  # save old
-        item[key] = torch.tensor(f_token(raw_item))  # tokenize
+        # tokenize and convert to tensor if applicable
+        item[key] = f_token(raw_item)
+        if not torch.is_tensor(item[key]):
+            item[key] = torch.tensor(item[key])
     return tokenizer
 
 

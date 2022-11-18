@@ -3,8 +3,10 @@ import csv
 import yaml
 import glob
 import itertools
-from datetime import datetime
 from collections import defaultdict
+
+import time
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -54,6 +56,11 @@ def chain(iterable, as_set=True):
 
 def get_timestamp():
     return datetime.now().strftime('%H:%M:%S')
+
+
+def get_unixtime():
+    timestamp = str(int(time.time()))
+    return timestamp
 
 
 def printt(*args, **kwargs):

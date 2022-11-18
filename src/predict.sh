@@ -4,13 +4,13 @@
 
 # inference params
 SEED=0
-CUDA=5
+CUDA=0
 NUM_GPU=2
-BATCH_SIZE=32
+BATCH_SIZE=40
 
 NAME="dips"
 CONFIG="config/${NAME}.yaml"
-CHECKPOINT="/data/scratch/rmwu/tmp-runs/glue/dips"
+CHECKPOINT="/data/scratch/rmwu/tmp-runs/glue/dips-4layer-nol2"
 SAVE_PATH=$CHECKPOINT
 TEST_FOLD=3
 

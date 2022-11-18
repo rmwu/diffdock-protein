@@ -5,8 +5,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from torch_geometric.nn import global_mean_pool
-from torch_cluster import knn_graph
 
 from .diffusion import TensorProductScoreModel
 from .losses import DiffusionLoss
@@ -45,22 +43,6 @@ class BaseModel(nn.Module):
 
     def forward(self, batch):
         raise Exception("Extend me")
-
-    def prepare_batch(self, batch):
-        """
-            Move everything to CUDA
-        """
-        for key in ["receptor", "ligand"]:
-            batch[key] = batch_graph(batch[key])
-            batch[key] = batch[key].cuda()
-            batch[key].label = batch[key].x  # save copy for labels
-            batch[key].x = self.res_ebd(batch[key])
-
-        for key in ["pose_new"]:
-            if key in batch:
-                pos_new = [item for item in batch[key]]
-                batch[key] = torch.cat(pos_new).cuda()
-        return batch
 
     def dist(self, x, y):
         if len(x.size()) > 1:

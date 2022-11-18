@@ -6,7 +6,7 @@ from utils import printt
 
 
 def parse_args():
-    parser = argparse.ArgumentParser("ML-based energy function")
+    parser = argparse.ArgumentParser("DiffDock for proteins")
 
     # configuration
     parser.add_argument("--debug",
@@ -27,9 +27,12 @@ def parse_args():
     parser.add_argument("--data_file",
                         type=str, default="",
                         help="Includes path to PDB files, splits")
-    parser.add_argument("--no_cache",
+    parser.add_argument("--no_graph_cache",
                         action="store_true",
                         help="Flag to disable caching of graphs")
+    parser.add_argument("--no_lm_cache",
+                        action="store_true",
+                        help="Flag to disable caching of ESM")
 
     parser.add_argument("--data_path",
                         type=str, default="",
@@ -40,6 +43,9 @@ def parse_args():
     parser.add_argument("--save_path",
                         type=str, default="",
                         help="Root to model checkpoints")
+    parser.add_argument("--torchhub_path",
+                        type=str, default="/data/scratch/rmwu/hub",
+                        help="Root to torch hub cache")
     parser.add_argument("--tensorboard_path",
                         type=str, default="runs",
                         help="Tensorboard directory")
@@ -61,9 +67,6 @@ def parse_args():
     parser.add_argument("--max_poses",
                         type=int, default=100,
                         help="maximum number of poses to load for eval")
-    parser.add_argument("--dist_threshold",
-                        type=float, default=10,
-                        help="threshold (A) for binding site")
 
     parser.add_argument("--num_workers",
                         type=int, default=0,
@@ -194,12 +197,17 @@ def parse_args():
     parser.add_argument("--nv",
                         type=int, default=4,
                         help="Number of hidden features per node of order >0")
+
     parser.add_argument("--dist_embed_dim",
                         type=int, default=32,
                         help="Embedding size for the distance")
     parser.add_argument("--cross_dist_embed_dim",
                         type=int, default=32,
                         help="Embeddings size for the cross distance")
+    parser.add_argument("--lm_embed_dim",
+                        type=int, default=0,
+                        help="0 or 1280 for ESM2")
+
     parser.add_argument("--no_batch_norm", action="store_true", default=False,
                         help="If set, it removes the batch norm")
     parser.add_argument("--use_second_order_repr",
@@ -276,6 +284,15 @@ def parse_args():
 
 
 def process_args(args):
+    """
+        This function does a couple of nice things:
+        1)  load any arguments specified in config_file
+        2)  set default save_path and args_path if checkpoint provided
+        3)  load any remaining arguments saved from checkpoint,
+            if applicable. config_file takes precedence over saved
+            args from checkpoint directory
+    """
+
     # used for dispatcher only (bash script auto-formats to config)
     ## process run_name
     if args.run_name is None:
@@ -315,9 +332,9 @@ def process_args(args):
                           "gpu", "mode", "test_fold",
                           "batch_size"])
         for k in k_to_skip:
-            if k in config:
-                del config[k]
-        override_args(args, config)
+            if k in saved_config:
+                del saved_config[k]
+        override_args(args, saved_config)
 
 
 def override_args(args, config):
