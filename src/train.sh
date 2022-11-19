@@ -4,7 +4,7 @@
 
 NUM_FOLDS=5  # number of seeds to try
 SEED=0  # initial seed
-CUDA=0  # will use GPUs from CUDA to CUDA + NUM_GPU - 1
+CUDA=4  # will use GPUs from CUDA to CUDA + NUM_GPU - 1
 NUM_GPU=4
 BATCH_SIZE=32  # split across all GPUs
 

@@ -167,8 +167,11 @@ class Loader:
             with open(self.graph_cache, "wb+") as f:
                 pickle.dump([data, data_params], f)
 
+        return data, data_params
+
+    def process_embed(self, data, data_params):
         #### tokenize AFTER converting to graph
-        if args.lm_embed_dim > 0:
+        if self.args.lm_embed_dim > 0:
             data = self.compute_embeddings(data)
             data_params["num_residues"] = 23  # <cls> <sep> <pad>
             printt("finished tokenizing residues with ESM")
@@ -214,6 +217,14 @@ class Loader:
         """
             Pre-compute ESM2 embeddings.
         """
+        # check if we already computed embeddings
+        if os.path.exists(self.esm_cache):
+            with open(self.esm_cache, "rb") as f:
+                path_to_rep = pickle.load(f)
+            self._save_esm_rep(data, path_to_rep)
+            printt("Loaded cached ESM embeddings")
+            return data
+
         printt("Computing ESM embeddings")
         # load pretrained model
         esm_model, alphabet = torch.hub.load(
@@ -226,33 +237,38 @@ class Loader:
         aa_code.update(
             {k.upper():v for k,v in protein_letters_3to1.items()})
         # fix ordering
-        all_graphs = list(g["graph"] for g in data.values())
+        all_pdbs = sorted(data)
+        all_graphs = [data[pdb]["graph"] for pdb in all_pdbs]
         rec_seqs = [g["receptor"].x for g in all_graphs]
         lig_seqs = [g["ligand"].x for g in all_graphs]
         rec_seqs = ["".join(aa_code[s] for s in seq) for seq in rec_seqs]
         lig_seqs = ["".join(aa_code[s] for s in seq) for seq in lig_seqs]
         # batchify sequences
-        rec_batches = self.esm_batchify(rec_seqs, tokenizer)
-        lig_batches = self.esm_batchify(lig_seqs, tokenizer)
+        rec_batches = self._esm_batchify(rec_seqs, tokenizer)
+        lig_batches = self._esm_batchify(lig_seqs, tokenizer)
         with torch.no_grad():
             pad_idx = alphabet.padding_idx
-            rec_reps = self.run_esm(rec_batches, pad_idx)
-            lig_reps = self.run_esm(lig_batches, pad_idx)
-        # overwrite graph.x for each element in batch
-        for idx in range(len(rec_reps)):
-            rec_graph = all_graphs[idx]["receptor"]
-            lig_graph = all_graphs[idx]["ligand"]
+            rec_reps = self._run_esm(rec_batches, pad_idx)
+            lig_reps = self._run_esm(lig_batches, pad_idx)
+
+        # dump to cache
+        path_to_rep = {}
+        for idx, pdb in enumerate(all_pdbs):
             # cat one-hot representation and ESM embedding
-            rec_graph.x = torch.cat([rec_reps[idx][0],
+            rec_graph_x = torch.cat([rec_reps[idx][0],
                 rec_reps[idx][1]], dim=1)
-            lig_graph.x = torch.cat([lig_reps[idx][0],
+            lig_graph_x = torch.cat([lig_reps[idx][0],
                 lig_reps[idx][1]], dim=1)
-            assert len(rec_graph.pos) == len(rec_graph.x)
-            assert len(lig_graph.pos) == len(lig_graph.x)
+            path_to_rep[pdb] = rec_graph_x, lig_graph_x
+        with open(self.esm_cache, "wb+") as f:
+            pickle.dump(path_to_rep, f)
+
+        # overwrite graph.x for each element in batch
+        self._save_esm_rep(data, path_to_rep)
 
         return data
 
-    def esm_batchify(self, seqs, tokenizer):
+    def _esm_batchify(self, seqs, tokenizer):
         batch_size = self.args.batch_size
         iterator = range(0, len(seqs), batch_size)
         # group up sequences
@@ -262,7 +278,7 @@ class Loader:
         batch_tokens = [tokenizer(batch)[2] for batch in batches]
         return batch_tokens
 
-    def run_esm(self, batches, padding_idx):
+    def _run_esm(self, batches, padding_idx):
         """
             Wrapper around ESM specifics
             @param (list)  batch
@@ -284,6 +300,19 @@ class Loader:
                 token_crop = batch[j,1:length+1,None]
                 cropped.append((rep_crop, token_crop))
         return cropped
+
+    def _save_esm_rep(self, data, path_to_rep):
+        """
+            Assign new ESM representation to graph.x
+        """
+        for pdb, (rec_rep, lig_rep) in path_to_rep.items():
+            rec_graph = data[pdb]["graph"]["receptor"]
+            lig_graph = data[pdb]["graph"]["ligand"]
+            rec_graph.x = rec_rep
+            lig_graph.x = lig_rep
+            assert len(rec_graph.pos) == len(rec_graph.x)
+            assert len(lig_graph.pos) == len(lig_graph.x)
+        return data
 
     def split_data(self, raw_data, args):
         # separate out train/test
@@ -344,7 +373,7 @@ class DIPSLoader(Loader):
         data = self.read_files()
         data = self.assign_receptor(data)
         data, data_params = self.process_data(data, args)
-        data = self.compute_embeddings(data)
+        data, data_params = self.process_embed(data, data_params)
 
         #### pre-compute ESM embeddings if needed
         self.data = data
@@ -427,7 +456,7 @@ class DB5Loader(Loader):
             self.data_cache = self.data_cache.replace(".pkl", "_b.pkl")
         data = self.read_files()
         data, data_params = self.process_data(data, args)
-        data = self.compute_embeddings(data)
+        data, data_params = self.process_embed(data, data_params)
         self.data = data
         self.data_params = data_params
         printt(len(self.data), "entries loaded")
@@ -478,7 +507,7 @@ class SabDabLoader(Loader):
         # standard workflow
         data = self.read_files()
         data, data_params = self.process_data(data, args)
-        data = self.compute_embeddings(data)
+        data, data_params = self.process_embed(data, data_params)
         self.data = data
         self.data_params = data_params
         printt(len(self.data), "entries loaded")

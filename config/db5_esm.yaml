@@ -5,7 +5,6 @@
      data_file: data/db5.csv
      data_path: /data/rsg/chemistry/rmwu/data/raw/binding/db5
      resolution: residue
-     no_graph_cache: True
  model:
      model_type: e3nn
      no_torsion: True
