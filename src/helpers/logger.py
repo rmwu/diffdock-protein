@@ -10,15 +10,21 @@ class Logger:
         """Logs scalar value."""
         raise Exception("Not implemented for this logger.")
 
+    def finish(self):
+        pass
+
 
 class WandbLogger(Logger):
     """Weight and Biases logger."""
 
     def __init__(self, project: str, entity: str, name: str = None, group: str = None):
-        wandb.init(project=project, entity=entity, name=name, group=group)
+        self.run = wandb.init(project=project, entity=entity, name=name, group=group, reinit=True)
 
     def add_scalar(self, tag: str, scalar_value, global_step=None):
         wandb.log({tag: scalar_value}, step=global_step)
+
+    def finish(self):
+        self.run.finish()
 
 
 class TensorboardLogger(Logger):

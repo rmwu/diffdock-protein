@@ -70,7 +70,8 @@ def main():
             if args.logger == "tensorboard":
                 writer = TensorboardLogger(log_dir=log_dir)
             elif args.logger == "wandb":
-                writer = WandbLogger(project=args.project, entity=args.entity, name=args.run_name, group=args.group)
+                writer = WandbLogger(project=f"{args.project}", entity=args.entity, name=f"{args.run_name}-fold-{fold}",
+                                     group=f"{args.group}")
             else:
                 raise Exception("Improper logger.")
             #### set up fold experiment
@@ -119,6 +120,9 @@ def main():
             print_res(test_score)
             # set next seed
             args.seed += 1
+
+            # Finish writing for this fold
+            writer.finish()
             # end of fold ========
 
         printt(f"{args.num_folds} folds average")
