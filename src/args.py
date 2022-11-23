@@ -72,13 +72,26 @@ def parse_args():
                         type=int, default=10,
                         help="number of protein complexes per batch")
     # logging
+    parser.add_argument("--logger",
+                        type=str, choices=["wandb", "tensorboard"],
+                        default="tensorboard",
+                        help="Which logger to use, wandb or tensorboard")
     parser.add_argument("--run_name",
                         type=str, default=None,
                         help=("(optional) tensorboard folder, aka 'comment' "
-                              "field. used for dispatcher"))
+                              "field. used for dispatcher. If wandb is used, the name of the run."))
     parser.add_argument("--log_frequency",
                         type=int, default=10,
-                        help="log to tensorboard every [n] batches")
+                        help="log every [n] batches")
+    parser.add_argument("--project",
+                        type=str, default=None,
+                        help="For wandb logger, the name of the project where you're sending the new run.")
+    parser.add_argument("--entity",
+                        type=str, default=None,
+                        help="For wandb logger, a username or team name where you're sending runs.")
+    parser.add_argument("--group",
+                        type=str, default=None,
+                        help="For wandb logger, a group to organize individual runs into a larger experiment.")
 
     # data processing
     parser.add_argument('--receptor_radius', type=float, default=30,

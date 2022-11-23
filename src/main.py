@@ -8,13 +8,14 @@ from collections import defaultdict
 import numpy as np
 import torch
 import torch.nn as nn
-from tensorboardX import SummaryWriter
+
 
 from args import parse_args
 from data import load_data, get_data
 from model import load_model, to_cuda
 from utils import printt, print_res, log
 from train import train, evaluate, evaluate_pose
+from helpers import WandbLogger, TensorboardLogger
 from sample import sample
 
 
@@ -60,7 +61,13 @@ def main():
         for fold in range(args.num_folds):
             log_dir = os.path.join(args.tensorboard_path,
                                    args.run_name, str(fold))
-            writer = SummaryWriter(log_dir=log_dir)
+            if args.logger == "tensorboard":
+                writer = TensorboardLogger(log_dir=log_dir)
+            elif args.logger == "wandb":
+                writer = WandbLogger(project=args.project, entity=args.entity, name=args.run_name, group=args.group)
+            else:
+                raise Exception("Improper logger.")
+
             ## set up fold
             set_seed(args.seed)
             # make save folder
