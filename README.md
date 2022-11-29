@@ -1,11 +1,8 @@
 # DiffDock modified for protein-protein
 
-Note: I added ESM embeddings directly back into the preprocessing. Currently
-it's not yet batched so it may take a while.
-Of course you should feel free to read through / poke around while I make it faster~
+Note: Add `--debug` flag to run on subset of DIPS (or switch to DB5) to debug.
 
-Also I would recommend debugging with DB5 instead of DIPS as it's very fast to
-run.
+ESM computation is batched and cached, but for all of DIPS, might be better to load on the fly (asynchronously) rather than all at once.
 
 ## Model training:
 
