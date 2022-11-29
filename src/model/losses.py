@@ -120,7 +120,7 @@ class DiffusionLoss(nn.Module):
         # compile and re-weight losses
         loss = tr_loss * self.tr_weight
         loss = loss + rot_loss * self.rot_weight
-        loss = loss + tr_loss * self.tr_weight
+        loss = loss + tor_loss * self.tor_weight
 
         losses = {
             "loss": loss,
