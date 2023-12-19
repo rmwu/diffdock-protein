@@ -1,5 +1,9 @@
 # DiffDock modified for protein-protein
 
+**NOTE**: This was the prototype for [DiffDock-PP](https://github.com/ketatam/DiffDock-PP). Please refer to that repository for usage.
+
+---
+
 Note: Add `--debug` flag to run on subset of DIPS (or switch to DB5) to debug.
 
 ESM computation is batched and cached, but for all of DIPS, might be better to load on the fly (asynchronously) rather than all at once.
